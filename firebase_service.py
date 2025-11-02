@@ -23,15 +23,27 @@ load_dotenv()
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
 
 # CRITICAL: Also explicitly load from system environment
-# This ensures GOOGLE_APPLICATION_CREDENTIALS is available even if dotenv didn't load it
+# This ensures GOOGLE_APPLICATION_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS is available
 import os as _os
-if "GOOGLE_APPLICATION_CREDENTIALS" in _os.environ:
-    # Make sure it's also in os.environ (sometimes dotenv doesn't propagate)
+
+# Check for JSON string in environment variable (preferred for production)
+if "GOOGLE_APPLICATION_CREDENTIALS_JSON" in _os.environ:
+    os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS_JSON", _os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"])
+    json_value = _os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"]
+    # Show first/last 50 chars for security (don't print full JSON)
+    if len(json_value) > 100:
+        preview = json_value[:50] + "..." + json_value[-50:]
+    else:
+        preview = json_value[:50] + "..."
+    print(f"[Firebase] GOOGLE_APPLICATION_CREDENTIALS_JSON found in system environment (length: {len(json_value)})")
+    print(f"[Firebase] Preview: {preview}")
+elif "GOOGLE_APPLICATION_CREDENTIALS" in _os.environ:
+    # Fallback to file path (for local development)
     os.environ.setdefault("GOOGLE_APPLICATION_CREDENTIALS", _os.environ["GOOGLE_APPLICATION_CREDENTIALS"])
     print(f"[Firebase] GOOGLE_APPLICATION_CREDENTIALS found in system environment: {_os.environ['GOOGLE_APPLICATION_CREDENTIALS']}")
     print(f"[Firebase] GOOGLE_APPLICATION_CREDENTIALS in os.environ: {os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')}")
 else:
-    print(f"[Firebase] [WARNING] GOOGLE_APPLICATION_CREDENTIALS not found in system environment")
+    print(f"[Firebase] [WARNING] Neither GOOGLE_APPLICATION_CREDENTIALS_JSON nor GOOGLE_APPLICATION_CREDENTIALS found in system environment")
 
 
 class FirebaseService:
@@ -72,7 +84,11 @@ class FirebaseService:
     def _initialize_firebase(self):
         """
         Initialize Firebase Admin SDK with credentials from environment variables.
-        Uses the exact same initialization logic as test_firebase_simple.py
+        
+        Priority:
+        1. GOOGLE_APPLICATION_CREDENTIALS_JSON (JSON string directly in env var)
+        2. GOOGLE_APPLICATION_CREDENTIALS (file path to JSON file)
+        3. FIREBASE_PROJECT_ID (for Application Default Credentials)
         """
         try:
             # Try to initialize Firebase Admin SDK
@@ -88,72 +104,98 @@ class FirebaseService:
                 from dotenv import load_dotenv
                 load_dotenv()
                 
-                # CRITICAL: Try multiple methods to get GOOGLE_APPLICATION_CREDENTIALS
-                # 1. Try os.getenv (from dotenv)
-                service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+                # METHOD 1: Try GOOGLE_APPLICATION_CREDENTIALS_JSON (JSON string in env var)
+                # This is preferred for production/deployment (e.g., Render, Heroku, etc.)
+                firebase_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON") or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
                 
-                # 2. Try os.environ directly
-                if not service_account_path:
-                    service_account_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-                
-                # 3. Try system environment (Windows)
-                if not service_account_path:
+                if firebase_json:
+                    print("[Firebase] Found GOOGLE_APPLICATION_CREDENTIALS_JSON (using JSON from environment variable)")
                     try:
-                        import subprocess
-                        result = subprocess.run(
-                            ['powershell', '-Command', '[Environment]::GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", "User")'],
-                            capture_output=True,
-                            text=True,
-                            timeout=2
-                        )
-                        if result.returncode == 0 and result.stdout.strip():
-                            service_account_path = result.stdout.strip()
-                            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = service_account_path
-                    except:
-                        pass
-                
-                print(f"[Firebase] Checking GOOGLE_APPLICATION_CREDENTIALS: {service_account_path}")
-                
-                if service_account_path:
-                    # Handle Windows paths - normalize separators
-                    # Try different path formats (same as test_firebase_simple.py)
-                    paths_to_try = [
-                        service_account_path,  # Original
-                        service_account_path.replace('/', '\\'),  # Windows backslash
-                        service_account_path.replace('\\', '/'),  # Forward slash
-                        os.path.normpath(service_account_path),  # Normalized
-                        os.path.abspath(service_account_path),  # Absolute
-                    ]
-                    
-                    path_to_use = None
-                    for path in paths_to_try:
-                        if os.path.exists(path):
-                            path_to_use = path
-                            break
-                    
-                    if path_to_use:
-                        print(f"[Firebase] Found service account file: {path_to_use}")
-                        cred = credentials.Certificate(path_to_use)
+                        # Convert string to dict
+                        cred_dict = json.loads(firebase_json)
+                        # Initialize Firebase Admin SDK with JSON dict
+                        cred = credentials.Certificate(cred_dict)
                         FirebaseService._app = firebase_admin.initialize_app(cred)
-                        print("[Firebase] [OK] Firebase initialized successfully")
-                    else:
-                        raise FileNotFoundError(
-                            f"Service account file not found at any of these paths:\n" +
-                            "\n".join(f"  - {p}" for p in paths_to_try)
-                        )
-                else:
-                    # Try with project ID from environment
+                        print("[Firebase] [OK] Firebase initialized successfully from JSON string")
+                    except json.JSONDecodeError as e:
+                        raise ValueError(f"Invalid JSON in GOOGLE_APPLICATION_CREDENTIALS_JSON: {str(e)}")
+                    except Exception as e:
+                        raise RuntimeError(f"Failed to initialize Firebase from JSON: {str(e)}")
+                
+                # METHOD 2: Try GOOGLE_APPLICATION_CREDENTIALS (file path)
+                # Fallback for local development
+                elif not FirebaseService._app:
+                    print("[Firebase] GOOGLE_APPLICATION_CREDENTIALS_JSON not found, trying file path...")
+                    
+                    # Try multiple methods to get GOOGLE_APPLICATION_CREDENTIALS
+                    # 1. Try os.getenv (from dotenv)
+                    service_account_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+                    
+                    # 2. Try os.environ directly
+                    if not service_account_path:
+                        service_account_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+                    
+                    # 3. Try system environment (Windows)
+                    if not service_account_path:
+                        try:
+                            import subprocess
+                            result = subprocess.run(
+                                ['powershell', '-Command', '[Environment]::GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS", "User")'],
+                                capture_output=True,
+                                text=True,
+                                timeout=2
+                            )
+                            if result.returncode == 0 and result.stdout.strip():
+                                service_account_path = result.stdout.strip()
+                                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = service_account_path
+                        except:
+                            pass
+                    
+                    print(f"[Firebase] Checking GOOGLE_APPLICATION_CREDENTIALS: {service_account_path}")
+                    
+                    if service_account_path:
+                        # Handle Windows paths - normalize separators
+                        # Try different path formats (same as test_firebase_simple.py)
+                        paths_to_try = [
+                            service_account_path,  # Original
+                            service_account_path.replace('/', '\\'),  # Windows backslash
+                            service_account_path.replace('\\', '/'),  # Forward slash
+                            os.path.normpath(service_account_path),  # Normalized
+                            os.path.abspath(service_account_path),  # Absolute
+                        ]
+                        
+                        path_to_use = None
+                        for path in paths_to_try:
+                            if os.path.exists(path):
+                                path_to_use = path
+                                break
+                        
+                        if path_to_use:
+                            print(f"[Firebase] Found service account file: {path_to_use}")
+                            cred = credentials.Certificate(path_to_use)
+                            FirebaseService._app = firebase_admin.initialize_app(cred)
+                            print("[Firebase] [OK] Firebase initialized successfully from file")
+                        else:
+                            raise FileNotFoundError(
+                                f"Service account file not found at any of these paths:\n" +
+                                "\n".join(f"  - {p}" for p in paths_to_try)
+                            )
+                
+                # METHOD 3: Try with project ID from environment (Application Default Credentials)
+                if not FirebaseService._app:
                     project_id = os.getenv("VITE_FIREBASE_PROJECT_ID") or os.getenv("FIREBASE_PROJECT_ID")
                     if not project_id:
                         raise ValueError(
-                            "GOOGLE_APPLICATION_CREDENTIALS or FIREBASE_PROJECT_ID not found.\n"
-                            "Set GOOGLE_APPLICATION_CREDENTIALS=C:/Users/nrhar/Downloads/serviceAccountKey.json"
+                            "No Firebase credentials found. Please set one of:\n"
+                            "  - GOOGLE_APPLICATION_CREDENTIALS_JSON (JSON string)\n"
+                            "  - GOOGLE_APPLICATION_CREDENTIALS (file path)\n"
+                            "  - FIREBASE_PROJECT_ID (for Application Default Credentials)"
                         )
                     
                     print(f"[Firebase] Using project ID: {project_id}")
                     # Try to initialize with project ID (uses Application Default Credentials)
                     FirebaseService._app = firebase_admin.initialize_app(options={'projectId': project_id})
-                    print("[Firebase] [OK] Firebase initialized successfully")
+                    print("[Firebase] [OK] Firebase initialized successfully with project ID")
                 
         except Exception as e:
             if isinstance(e, (RuntimeError, ValueError, FileNotFoundError)):
