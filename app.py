@@ -53,12 +53,30 @@ except ImportError:
 load_dotenv()  # project root
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
 
-# CRITICAL: Ensure GOOGLE_APPLICATION_CREDENTIALS is explicitly set from system environment
+# CRITICAL: Ensure GOOGLE_APPLICATION_CREDENTIALS_JSON or GOOGLE_APPLICATION_CREDENTIALS is explicitly set from system environment
 # This is needed because async context might not have access to system env vars
-if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
-    # Already loaded, keep it
-    pass
-else:
+# Priority: GOOGLE_APPLICATION_CREDENTIALS_JSON (JSON string) > GOOGLE_APPLICATION_CREDENTIALS (file path)
+
+# Check for JSON string first (preferred for production)
+if "GOOGLE_APPLICATION_CREDENTIALS_JSON" not in os.environ:
+    # Try to get from system environment (Windows environment variables)
+    import sys
+    import subprocess
+    try:
+        # On Windows, try to get from system environment
+        result = subprocess.run(
+            ['powershell', '-Command', '[Environment]::GetEnvironmentVariable("GOOGLE_APPLICATION_CREDENTIALS_JSON", "User")'],
+            capture_output=True,
+            text=True,
+            timeout=2
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS_JSON"] = result.stdout.strip()
+    except:
+        pass  # Non-critical, continue anyway
+
+# Fallback to file path method if JSON not found
+if "GOOGLE_APPLICATION_CREDENTIALS" not in os.environ:
     # Try to get from system environment (Windows environment variables)
     import sys
     import subprocess
