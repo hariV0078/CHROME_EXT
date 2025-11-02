@@ -19,9 +19,10 @@ webdriver-manager==4.0.2
 # PDF/OCR and agents
 pdfplumber==0.11.4
 phidata==2.7.9
-openai==1.51.2
+openai
 pyngrok==7.2.3
 
 # Firebase
 firebase-admin==6.6.0
 pytz==2024.1
+
