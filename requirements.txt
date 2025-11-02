@@ -5,6 +5,7 @@ beautifulsoup4==4.12.3
 lxml==5.3.0
 pydantic==2.9.2
 python-dotenv==1.0.1
+python-multipart
 firecrawl-py
 # Matching
 sentence-transformers==3.0.1
@@ -25,5 +26,6 @@ pyngrok==7.2.3
 # Firebase
 firebase-admin==6.6.0
 pytz==2024.1
+
 
 
